@@ -96,10 +96,15 @@ expose backend keys or any arbitrary-RPC endpoint to the browser.
 Connect this repository to a Railway project with **two separate services**.
 Keep the repository root as the build context for both Dockerfiles.
 
+The current Railway API rejects the legacy `railway.toml` config-file setting.
+Configure the settings below directly on each service. The TOML files in this
+repository are legacy references; this deployment does not load them.
+
 ### Web service
 
-- Config file: `/web/railway.toml`
 - Dockerfile: `web/Dockerfile`
+- Source: this GitHub repository, branch `main`; root directory `/`.
+- Restart policy: on failure; one replica.
 - Generate a public domain; the process binds to Railway's `PORT`.
 - Health check: `/api/health` (process liveness, not database readiness).
 - Variables: all fields in `web/.env.example`.
@@ -111,8 +116,9 @@ Keep the repository root as the build context for both Dockerfiles.
 
 ### Worker service
 
-- Config file: `/worker/railway.toml`
 - Dockerfile: `worker/Dockerfile`
+- Source: this GitHub repository, branch `main`; root directory `/`.
+- Restart policy: on failure, maximum three retries; disable application sleeping.
 - No public domain or HTTP health check; it is a background process.
 - Attach a **persistent Railway volume mounted at `/data`**.
 - Variables: all fields in `worker/.env.example`.

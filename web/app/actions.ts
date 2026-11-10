@@ -20,7 +20,7 @@ export async function prepare(input: unknown): Promise<{ error?: string; campaig
     return { campaignId: existing.id };
   }
   const { data: connection, error: connectionError } = await db.from("outlook_connections").select("id,status,mailbox_email").eq("user_id", user.id).single();
-  if (connectionError || connection?.status !== "active") return { error: "An active Outlook connection is required. Ask your administrator to configure your mailbox." };
+  if (connectionError || connection?.status !== "active") return { error: "Connect Outlook from the dashboard before creating a preview." };
   const admin = adminClient();
   const leads: Lead[] = [];
   for (let start = 0; start < request.leadIds.length; start += 50) {

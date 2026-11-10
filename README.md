@@ -31,6 +31,7 @@ Apply migrations in order. Do not rerun migrations already applied:
 1. `supabase/migrations/202611100001_outreach_foundation.sql` (already used by live tests)
 2. `supabase/migrations/202611100002_outreach_send_gate.sql` (already used by live tests)
 3. **New:** `supabase/migrations/202611100003_app_preview.sql`
+4. `supabase/migrations/202611100004_outlook_self_service.sql`
 
 The third migration adds app request/exclusion snapshots and a service-only RPC
 that serializes duplicate preview requests. Unchanged retries return the same
@@ -69,13 +70,58 @@ Invite users from the Supabase dashboard. Add an active `outreach_members` row f
 each invited Auth UUID before they use the app. There is no public signup UI or
 signup action. Existing users and memberships can sign in as-is.
 
-### Outlook connections
+### Self-service Outlook connections
 
-The MVP uses the existing administrator-registered `outlook_connections` mapping.
-Each active user needs their own verified mailbox/entity/account mapping. The
-dashboard displays connection status. Self-service OAuth onboarding/reconnection
-is a follow-up, not implemented in this milestone. Use the **correct Composio
-project API key** and retain the existing verified connection for the first test.
+Invited members open **Manage Outlook** on the dashboard or `/settings/outlook`
+to connect, reconnect, check, or disconnect their mailbox. The Microsoft mailbox
+may differ from the app login email; Graph `/me` supplies the read-only sender.
+
+Apply migration **004 before deploying the self-service web changes**. It adds
+stable Composio identities, short-lived authorization attempts, and a durable
+disable-only cleanup queue. Existing manually registered identities and connection
+row IDs are preserved, including the IDs referenced by saved campaigns.
+
+Set these **server-only web-service variables** (the worker keeps its current key):
+
+```dotenv
+COMPOSIO_API_KEY=<same-working-Composio-project-key>
+COMPOSIO_OUTLOOK_AUTH_CONFIG_ID=<Outlook-OAuth2-auth-config-ID>
+```
+
+Use an Outlook OAuth2 auth configuration that supports Graph `/me` and delegated
+`Mail.Send`. Microsoft tenant consent requirements still apply. The application
+return URL is `${APP_URL}/settings/outlook/callback`; Composio handles Microsoft's
+OAuth exchange itself. If your Composio configuration restricts application return
+URLs, allow this route for each environment. It is separate from Supabase Auth's
+invitation/reset callback. For local use, set `APP_URL=http://localhost:3000`.
+
+The server uses Composio v3.1 **Connect Link**, saves the returned exact connected
+account ID, and binds the return to the member, auth config, random single-use
+state, and initiating browser cookie. The pending attempt expires after ten
+minutes. Starting a newer attempt supersedes the old one; starts are limited to
+one per 30 seconds. The server verifies the provider owner, toolkit, active/enabled
+state, auth config, and Graph mailbox before switching the mapping. No OAuth
+tokens are persisted in Supabase or passed to application client components.
+
+Reconnect creates a replacement account and switches only after verification.
+Disconnect blocks local send authorization first. Replaced, disconnected, and
+cancelled accounts enter the disable-only cleanup queue; successful callback,
+cancel, and disconnect actions attempt cleanup. **Retry provider cleanup** handles
+provider outages or interrupted cleanup from the settings page. A cancelled
+in-flight link creation is queued for cleanup when its account ID returns. If the
+provider created an account but the response was lost before its ID was saved,
+an administrator may need to remove that unlinked account in Composio.
+
+Existing campaigns retain their exact sender snapshots. A changed or disconnected
+sender blocks draft confirmation and new claim/send-gate authorization. The
+campaign page explains why queued recipients are blocked; create a new reviewed
+preview for unsent messages. Already-dispatching sends may complete. History and
+ambiguous outcomes are never reset automatically.
+
+Live acceptance: connect a second invited user, verify a mailbox different from
+their login email, submit one reviewed test message, then exercise cancellation,
+reconnect, disconnect, and provider-cleanup retries. Confirm each user can manage
+only their own connection and campaigns.
 
 ## 2. Local web development
 
@@ -179,6 +225,10 @@ python -B -m unittest discover -s tests
 
 SQL syntax checks use optional `pglast`; they do not verify deployed function bodies,
 RLS, or concurrency. Worker tests use fake APIs and a real temporary SQLite file.
+Web tests also run all four migrations and the Outlook lifecycle functions in
+PGlite (embedded PostgreSQL), exercising privileges, ownership, expiry, superseded
+callbacks, cleanup, and campaign snapshots. This does not replace live Supabase
+or concurrent multi-session acceptance testing.
 
 ### Required live acceptance checks
 
@@ -196,5 +246,7 @@ RLS, or concurrency. Worker tests use fake APIs and a real temporary SQLite file
 10. Run a small controlled multi-recipient campaign and inspect recipient states.
 
 Railway deployment, credentials, live Auth redirects, live RLS/concurrency, and
-two-user mailbox isolation must be verified in your environment. The next feature
-milestone is self-service Outlook onboarding and richer reconciliation/reporting.
+two-user mailbox isolation must be verified in your environment. Self-service
+Outlook code is implemented; production OAuth acceptance requires migration 004,
+the web-service Composio variables, and the live checks above. Richer
+reconciliation/reporting remains a follow-up.

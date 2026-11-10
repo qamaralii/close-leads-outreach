@@ -8,7 +8,7 @@ export default async function Page() {
     db.from("outlook_connections").select("mailbox_email,status").eq("user_id", user.id).maybeSingle(),
   ]);
   return <><nav><a href="/compose">New campaign</a><span>{user.email}</span><form action={logout}><button>Sign out</button></form></nav>
-    <section><h1>Your campaigns</h1><p>Outlook: {connection ? `${connection.mailbox_email} (${connection.status})` : "Not connected — ask your administrator to register your mailbox."}</p>
+    <section><h1>Your campaigns</h1><p>Sending from: {connection ? `${connection.mailbox_email} (${connection.status})` : "No Outlook mailbox connected."} <a href="/settings/outlook">{connection ? "Manage Outlook" : "Connect Outlook"}</a></p>
     {error && <p className="error">Could not load campaigns.</p>}
     <table><thead><tr><th>Subject</th><th>Status</th><th>Recipients</th></tr></thead><tbody>{campaigns?.map(c => <tr key={c.id}><td><a href={`/campaigns/${c.id}`}>{c.subject_template}</a></td><td>{c.status}</td><td>{c.expected_recipient_count}</td></tr>)}</tbody></table>
     {!campaigns?.length && !error && <p>No campaigns yet.</p>}<small>Latest 100 campaigns. Submitted means queued for execution; open a campaign for recipient outcomes.</small></section></>;

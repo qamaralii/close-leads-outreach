@@ -1,0 +1,8 @@
+{
+  "name": "close-outreach-web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {"dev": "next dev", "build": "next build", "start": "next start -H 0.0.0.0", "test": "tsx --test tests/*.test.ts", "typecheck": "tsc --noEmit"},
+  "dependencies": {"@supabase/ssr": "^0.8.0", "@supabase/supabase-js": "^2.95.0", "next": "^16.1.0", "react": "^19.2.0", "react-dom": "^19.2.0", "server-only": "^0.0.1", "zod": "^4.3.0"},
+  "devDependencies": {"@types/node": "^22.0.0", "@types/react": "^19.0.0", "@types/react-dom": "^19.0.0", "tsx": "^4.21.0", "typescript": "^5.9.0"}
+}

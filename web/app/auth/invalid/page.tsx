@@ -1,0 +1,1 @@
+export default function Page() { return <section><h1>Link invalid or expired</h1><p>Ask your administrator for a fresh invitation, or <a href="/auth/reset">request a password reset</a>.</p></section>; }

@@ -1,0 +1,13 @@
+**/node_modules
+**/.next
+**/__pycache__
+**/.venv
+**/.env
+**/.env.*
+!**/.env.example
+**/*.sqlite*
+**/*.tsbuildinfo
+.git
+.local-data
+.railway
+context (2).md

@@ -1,0 +1,13 @@
+node_modules/
+.next/
+*.tsbuildinfo
+__pycache__/
+.venv/
+.env
+.env.*
+!.env.example
+*.sqlite*
+.local-data/
+.railway/
+*.log
+context (2).md

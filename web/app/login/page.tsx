@@ -1,2 +1,2 @@
 import { AuthForm } from "../auth/form";
-export default function Page() { return <section className="auth"><h1>Sign in</h1><p>Access is by invitation only.</p><AuthForm mode="login" /><p><a href="/auth/reset">Forgot password?</a></p></section>; }
+export default function Page() { return <section className="auth"><div className="auth-intro"><span className="eyebrow">Welcome back</span><h1>Sign in to Outreach</h1><p>Build considered campaigns, review every message, and send through your connected Outlook account.</p></div><AuthForm mode="login" /><p className="auth-footer"><a href="/auth/reset">Forgot your password?</a><span>Access is by invitation only.</span></p></section>; }

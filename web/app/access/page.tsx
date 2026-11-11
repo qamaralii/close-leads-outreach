@@ -1,2 +1,2 @@
 import { logout } from "../auth/actions";
-export default function Page() { return <section><h1>Membership required</h1><p>Ask your administrator to activate your outreach membership.</p><form action={logout}><button>Sign out</button></form></section>; }
+export default function Page() { return <section className="auth auth-state"><span className="state-icon" aria-hidden="true">i</span><span className="eyebrow">Access pending</span><h1>Membership required</h1><p>Your account is valid, but your Outreach membership has not been activated yet. Ask your administrator for access.</p><form action={logout}><button className="secondary">Sign out</button></form></section>; }

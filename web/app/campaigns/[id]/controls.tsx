@@ -8,5 +8,5 @@ export function Controls({ id, draft, blocked = false }: { id: string; draft: bo
   useEffect(() => { if (!draft) { const timer = setInterval(() => router.refresh(), 10000); return () => clearInterval(timer); } }, [draft, router]);
   if (!draft) return <p>Results refresh every 10 seconds. Microsoft acceptance is shown as submitted; it is not a delivery receipt.</p>;
   if (blocked) return <p>Confirmation is unavailable because the reviewed sender is no longer active.</p>;
-  return <form action={action}><input type="hidden" name="campaignId" value={id} /><label><input type="checkbox" name="reviewed" value="yes" required /> I reviewed the saved recipients, sender, and messages and confirm sending.</label><p className="error">{error}</p><button disabled={pending}>{pending ? "Submitting…" : "Confirm & send"}</button></form>;
+  return <form className="review-confirmation" action={action}><input type="hidden" name="campaignId" value={id} /><label><input type="checkbox" name="reviewed" value="yes" required /> I reviewed the saved recipients, sender, and messages and confirm sending.</label><p className="error" role="alert">{error}</p><button disabled={pending}>{pending ? "Submitting…" : "Confirm & send"}</button></form>;
 }

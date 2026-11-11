@@ -32,11 +32,27 @@ Apply migrations in order. Do not rerun migrations already applied:
 2. `supabase/migrations/202611100002_outreach_send_gate.sql` (already used by live tests)
 3. **New:** `supabase/migrations/202611100003_app_preview.sql`
 4. `supabase/migrations/202611100004_outlook_self_service.sql`
+5. `supabase/migrations/202611100005_contact_sorting.sql`
 
 The third migration adds app request/exclusion snapshots and a service-only RPC
 that serializes duplicate preview requests. Unchanged retries return the same
 campaign even if source contacts have since changed. Edited input gets a new UUID.
 The existing lifecycle functions still perform all submit/claim/gate/finish writes.
+
+### Contact sorting
+
+Apply migration **005 before deploying the contact sorting UI**. Its read-only
+`close_contact_directory` view respects the caller's existing lead-table RLS
+(`security_invoker`, PostgreSQL 15+). It reads `source_data.date_created` as a
+timestamp with time zone; missing or invalid dates become null. It does not
+rewrite lead records or use `last_synced_at`. Future imports appear automatically.
+
+The composer supports Name and Company A–Z/Z–A, plus Date created in Close
+newest/oldest first. Default is Name A–Z. Search, ordering, and pagination execute
+in the database. Names/companies are trimmed and case-insensitive for sorting,
+missing values stay last, and lead ID breaks ties. Changing search or ordering
+resets the page, retaining selected contacts and composed messages. The displayed
+creation date is UTC and refers to the Close lead, not its individual contact.
 
 Keep the existing `close_leads` table and Flow 1 ingestion. No recurring ingestion
 or scheduled campaigns are introduced.
@@ -225,7 +241,7 @@ python -B -m unittest discover -s tests
 
 SQL syntax checks use optional `pglast`; they do not verify deployed function bodies,
 RLS, or concurrency. Worker tests use fake APIs and a real temporary SQLite file.
-Web tests also run all four migrations and the Outlook lifecycle functions in
+Web tests also run the migrations and the Outlook lifecycle functions in
 PGlite (embedded PostgreSQL), exercising privileges, ownership, expiry, superseded
 callbacks, cleanup, and campaign snapshots. This does not replace live Supabase
 or concurrent multi-session acceptance testing.

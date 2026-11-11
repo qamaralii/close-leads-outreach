@@ -5,6 +5,7 @@ import { requestSchema, resolvePreview, validateMessage, type Lead } from "@/lib
 import { z } from "zod";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
+import { resolveSchedule } from "@/lib/scheduling";
 
 export async function prepare(input: unknown): Promise<{ error?: string; campaignId?: string }> {
   const { user, db } = await requireMember();
@@ -106,9 +107,43 @@ export async function confirm(_: string, form: FormData) {
   const id = z.uuid().safeParse(form.get("campaignId"));
   const revision = z.coerce.number().int().positive().safeParse(form.get("revision"));
   if (!id.success || !revision.success || form.get("reviewed") !== "yes") return "Review the saved messages and check the confirmation box.";
+  const mode = z.enum(["now", "scheduled"]).safeParse(form.get("sendMode") ?? "now");
+  if (!mode.success) return "Choose send now or schedule for later.";
+  if (mode.data === "scheduled") {
+    const result = await scheduleCampaign({ campaignId: id.data, revision: revision.data, operationId: form.get("operationId"), operation: "schedule", schedule: { localTime: form.get("localTime"), timezone: form.get("timezone"), instant: form.get("instant") } });
+    if (result.error) return result.error;
+    redirect(`/campaigns/${id.data}`);
+  }
   const { error } = await adminClient().rpc("confirm_outreach_revision", { p_user_id: user.id, p_campaign_id: id.data, p_revision: revision.data });
   if (error?.message.includes("Draft changed")) return "This draft changed. Refresh and review the updated messages before confirming.";
   if (error) return "Submission could not be confirmed. Refresh to check its status before retrying the same campaign.";
   revalidatePath(`/campaigns/${id.data}`);
   redirect(`/campaigns/${id.data}`);
+}
+
+const scheduleActionSchema = z.object({ campaignId: z.uuid(), revision: z.number().int().positive(), operationId: z.uuid(), operation: z.enum(["schedule", "reschedule", "withdraw"]), schedule: z.unknown().optional() }).strict();
+export async function scheduleCampaign(input: unknown): Promise<{ error?: string; campaignId?: string }> {
+  const { user } = await requireMember();
+  const parsed = scheduleActionSchema.safeParse(input);
+  if (!parsed.success) return { error: "Invalid schedule request. Refresh and try again." };
+  const request = parsed.data;
+  let schedule;
+  if (request.operation !== "withdraw") {
+    try { schedule = resolveSchedule(request.schedule); }
+    catch (error) { return { error: error instanceof Error ? error.message : "Invalid send time." }; }
+  }
+  const { data, error } = await adminClient().rpc("manage_outreach_schedule", {
+    p_user_id: user.id, p_campaign_id: request.campaignId, p_revision: request.revision,
+    p_operation_id: request.operationId, p_operation: request.operation,
+    p_scheduled_at: schedule?.instant ?? null, p_timezone: schedule?.timezone ?? null,
+  });
+  if (error || typeof data !== "string") {
+    if (error?.message.includes("changed")) return { error: "This campaign changed. Refresh and review before continuing." };
+    if (error?.message.includes("locked") || error?.message.includes("started")) return { error: "Sending is due or has started. This schedule can no longer be changed." };
+    if (error?.message.includes("future")) return { error: "Choose a future send time." };
+    if (error?.message.includes("sender")) return { error: "The reviewed sender is no longer active. Check Outlook before scheduling." };
+    return { error: "Schedule changes could not be confirmed. Retry unchanged input or refresh to check the campaign." };
+  }
+  revalidatePath(`/campaigns/${request.campaignId}`); revalidatePath(`/campaigns/${request.campaignId}/edit`); revalidatePath("/");
+  return { campaignId: data };
 }

@@ -148,6 +148,8 @@ class WorkerTests(unittest.TestCase):
             api.queued(("2026-11-10T09:00:00+00:00", "recipient-id"))
         params = parse_qs(urlsplit(request.call_args.args[0]).query)
         self.assertEqual(params["order"], ["due_at.asc,id.asc"])
+        self.assertEqual(params["campaigns.status"], ["in.(scheduled,submitted)"])
+        self.assertTrue(params["due_at"][0].startswith("lte."))
         self.assertIn("id.gt.recipient-id", params["or"][0])
 
 

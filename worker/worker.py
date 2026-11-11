@@ -46,7 +46,7 @@ class API:
 
     def queued(self, cursor=None):
         params = {"select": "id,campaign_id,due_at,campaigns!inner(created_by,status)", "status": "eq.queued",
-                  "campaigns.status": "eq.submitted", "due_at": "lte." + datetime.now(timezone.utc).isoformat(),
+                  "campaigns.status": "in.(scheduled,submitted)", "due_at": "lte." + datetime.now(timezone.utc).isoformat(),
                   "order": "due_at.asc,id.asc", "limit": "100"}
         if cursor:
             due_at, recipient_id = cursor

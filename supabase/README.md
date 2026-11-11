@@ -6,6 +6,8 @@ This document describes the original foundation contract. Migration 006 adds
 in-place draft editing and replaces revision-free confirmation with
 `confirm_outreach_revision`; see the root README's **Draft editing** section for
 the current contract and deployment order. Submitted snapshots remain immutable.
+Migration 007 adds one-time schedules and a due-time claim gate; the root README's
+**Campaign scheduling** section supersedes the scheduling restrictions below.
 
 `migrations/202611100001_outreach_foundation.sql` is a new, unapplied migration.
 It extends the existing `public.close_leads` table without replacing Flow 1.

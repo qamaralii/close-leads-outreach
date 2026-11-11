@@ -13,6 +13,8 @@ campaign lifecycle RPCs, and a separate sequential Python worker on Railway.
   previews. Exclusions are persisted alongside the app request.
 - Drafts support campaign-wide template/selection edits and individual personalized
   message overrides, with reset-to-template and revision-aware confirmation.
+- One-time scheduling supports local-time defaults, selectable time zones,
+  rescheduling, and returning scheduled campaigns to draft before their send time.
 - A distinct confirmation action submits the reviewed campaign revision. No caller-controlled
   identity, sender, or Langflow inputs are accepted. Individual message edits are validated server-side.
 - Results show recipient states and messages, refreshing every ten seconds.
@@ -36,6 +38,7 @@ Apply migrations in order. Do not rerun migrations already applied:
 4. `supabase/migrations/202611100004_outlook_self_service.sql`
 5. `supabase/migrations/202611100005_contact_sorting.sql`
 6. `supabase/migrations/202611110006_draft_editing.sql`
+7. `supabase/migrations/202611110007_campaign_scheduling.sql`
 
 The third migration adds app request/exclusion snapshots and a service-only RPC
 that serializes duplicate preview requests. Unchanged retries return the same
@@ -64,6 +67,42 @@ confirmation on the campaign lock, and increments the version transactionally.
 Unchanged retries reuse an edit ID; stale versions and conflicting edit IDs fail.
 Opening an individual editor clears and disables the review checkbox, and saved
 changes require a fresh review. Submitted campaign content stays immutable.
+
+### Campaign scheduling
+
+Apply migration **007 before deploying the matching web and worker builds**.
+The migration enables `scheduled` campaigns and extends the claim RPC with an
+atomic due-time check and transition into the existing submitted/send lifecycle.
+Existing immediate campaigns still work. The old worker does not pick up scheduled
+campaigns, so deploy the updated worker before users confirm schedules. No new
+environment variables or cron service are needed.
+
+On the saved preview choose **Schedule for later**, enter a date/time, and choose an
+IANA time zone. The zone defaults to the browser's zone. The UI shows the exact
+date, zone and UTC offset before **Confirm schedule**. Invalid/past times and DST
+gaps are rejected; overlapping DST times require choosing the earlier/later instant.
+The server independently resolves the wall-clock time and validates the instant.
+Supabase stores the UTC send instant and chosen zone; all recipient `due_at` values
+are updated transactionally.
+
+Before the scheduled instant, **Reschedule** changes the time, **Cancel schedule**
+returns the campaign to draft, and **Edit campaign** withdraws the schedule before
+reopening the composer. Withdrawal restores recipients to `ready`, clears their
+due times, preserves individual overrides, and increments the campaign revision.
+Sending/scheduling again requires explicit confirmation. At the scheduled instant,
+management controls lock even if the worker has not yet claimed a recipient.
+
+The worker includes both due scheduled and submitted campaigns in its existing
+keyset-paginated queue query. Database campaign locks serialize schedule changes
+with the first claim; future schedules cannot be claimed. On the first eligible
+claim the campaign becomes `submitted`, and the existing suppression, sender,
+membership, send-gate and finish-only outbox checks continue to apply. An older tab
+or a stale queue candidate cannot undo a later withdrawal/reschedule.
+
+The scheduled time is an **earliest start**, not a guaranteed delivery time or a
+simultaneous send for all recipients. The sequential worker starts overdue campaigns
+when it resumes after downtime. Scheduling is one-time; recurring campaigns are not
+implemented.
 
 ### Contact sorting
 
@@ -289,6 +328,12 @@ or concurrent multi-session acceptance testing.
 9. Sign in as a second member; verify shared contact access but no cross-user
    campaign reads/actions. Verify different Outlook mailboxes are isolated.
 10. Run a small controlled multi-recipient campaign and inspect recipient states.
+11. Schedule a reviewed test campaign a few minutes ahead. Verify zero claims before
+    its time, then Microsoft acceptance afterwards. Before its time, exercise
+    rescheduling and withdrawal/editing; confirm stale tabs/candidates cannot send
+    or alter the newer version. In a controlled environment, stop and resume the
+    worker across the due time to verify overdue pickup and test concurrent
+    schedule management versus first claim.
 
 Railway deployment, credentials, live Auth redirects, live RLS/concurrency, and
 two-user mailbox isolation must be verified in your environment. Self-service

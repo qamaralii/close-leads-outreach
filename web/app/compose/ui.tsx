@@ -1,18 +1,19 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { prepare } from "../actions";
+import { prepare, editCampaign } from "../actions";
 import type { ContactSort, SortDirection } from "@/lib/contact-directory";
 type Contact = { close_lead_id: string; contact_name: string | null; company_name: string | null; email: string | null; close_created_at: string | null };
-export function Composer() {
+type Draft = { id: string; revision: number; requestId: string; leadIds: string[]; subject: string; body: string; savedContacts?: { close_lead_id: string; recipient_name: string | null; recipient_email: string }[] };
+export function Composer({ draft }: { draft?: Draft }) {
   const router = useRouter();
-  const [contacts, setContacts] = useState<Contact[]>([]), [selected, setSelected] = useState<string[]>([]);
+  const [contacts, setContacts] = useState<Contact[]>([]), [selected, setSelected] = useState<string[]>(draft?.leadIds ?? []);
   const [q, setQ] = useState(""), [page, setPage] = useState(0), [count, setCount] = useState(0);
   const [sort, setSort] = useState<ContactSort>("name"), [direction, setDirection] = useState<SortDirection>("asc");
   const [loading, setLoading] = useState(true);
   const [contactError, setContactError] = useState("");
   const [retry, setRetry] = useState(0);
-  const [subject, setSubject] = useState("Hello {{company}}"), [body, setBody] = useState("Hi {{first_name}},\n\n");
+  const [subject, setSubject] = useState(draft?.subject ?? "Hello {{company}}"), [body, setBody] = useState(draft?.body ?? "Hi {{first_name}},\n\n");
   const [requestId, setRequestId] = useState(""), [error, setError] = useState(""), [pending, setPending] = useState(false);
   useEffect(() => { setRequestId(crypto.randomUUID()); }, []);
   useEffect(() => {
@@ -33,8 +34,9 @@ export function Composer() {
   function edited() { setRequestId(crypto.randomUUID()); }
   async function save() {
     setPending(true); setError("");
-    try { const result = await prepare({ requestId, leadIds: selected, subject, body });
-      if (result.campaignId) router.push(`/campaigns/${result.campaignId}`);
+    try { const input = { requestId: draft?.requestId ?? requestId, leadIds: selected, subject, body };
+      const result = draft ? await editCampaign({ campaignId: draft.id, revision: draft.revision, editId: requestId }, input) : await prepare(input);
+      if (result.campaignId) { router.push(`/campaigns/${result.campaignId}`); router.refresh(); }
       else setError(result.error ?? "Preview failed.");
     } catch { setError("Response lost. Retry unchanged input to reuse the same request ID."); }
     finally { setPending(false); }
@@ -48,6 +50,7 @@ export function Composer() {
         <label>Order<select value={direction} onChange={e => { setDirection(e.target.value as SortDirection); setPage(0); }}><option value="asc">{sort === "created" ? "Oldest first" : "A–Z"}</option><option value="desc">{sort === "created" ? "Newest first" : "Z–A"}</option></select></label>
       </div>
       <div className="selection-bar"><span aria-live="polite"><strong>{selected.length} selected</strong> / 1,000 maximum</span><button className="quiet" disabled={pending || !selected.length} onClick={() => { setSelected([]); edited(); }}>Clear selection</button></div>
+      {draft && <details className="selected-contacts"><summary>Review selected contacts ({selected.length})</summary><ul>{selected.map(id => <li key={id}><span>{contacts.find(c => c.close_lead_id === id)?.contact_name || draft.savedContacts?.find(c => c.close_lead_id === id)?.recipient_name || draft.savedContacts?.find(c => c.close_lead_id === id)?.recipient_email || id}</span><button className="quiet" disabled={pending} aria-label={`Remove ${id}`} onClick={() => { setSelected(selected.filter(value => value !== id)); edited(); }}>Remove</button></li>)}</ul></details>}
       <p className="table-hint">Scroll the table to see more contacts and columns.</p>
       <div className="table-scroll contact-table" tabIndex={0} role="region" aria-label="Contact directory" aria-busy={loading}>
         {loading ? <div className="empty-state" role="status">Loading contacts…</div> : contactError ? <div className="empty-state"><p className="error" role="alert">{contactError}</p><button className="secondary" onClick={() => setRetry(retry + 1)}>Try again</button></div> : !contacts.length ? <div className="empty-state"><h2>{q ? "No matching contacts" : "No contacts to show"}</h2><p>{q ? "Try another name, company, or email." : "Imported Close contacts will appear here."}</p>{q && <button className="secondary" onClick={() => { setQ(""); setPage(0); }}>Clear search</button>}</div> :
@@ -65,7 +68,8 @@ export function Composer() {
       <label>Message<textarea aria-describedby="placeholder-help" maxLength={100000} disabled={pending} value={body} onChange={e => { setBody(e.target.value); edited(); }} /></label>
       <p className="field-help" id="placeholder-help">Personalize with <code>{"{{first_name}}"}</code> and <code>{"{{company}}"}</code>. You’ll review the filled-in messages next.</p>
       <div className="compose-footer"><p className="muted">{selected.length ? `${selected.length} contact${selected.length === 1 ? "" : "s"} selected for preview` : "Select contacts to create your preview."}</p>
-        {error && <p className="error" role="alert">{error}</p>}<button disabled={pending || !selected.length || !requestId || !subject.trim() || !body.trim()} onClick={save}>{pending ? "Saving preview…" : "Create saved preview →"}</button><small>This saves a draft. Sending requires your confirmation.</small>
+        {draft && <p className="field-help">Customized messages are preserved for retained recipients with the same email address. Reset them on the review page to use the updated template.</p>}
+        {error && <p className="error" role="alert">{error}</p>}<button disabled={pending || !selected.length || !requestId || !subject.trim() || !body.trim()} onClick={save}>{pending ? "Saving preview…" : draft ? "Save changes & review →" : "Create saved preview →"}</button>{draft && <button className="secondary" disabled={pending} onClick={() => router.push(`/campaigns/${draft.id}`)}>Cancel</button>}<small>This saves a draft. Sending requires your confirmation.</small>
       </div>
     </section>
   </div>;

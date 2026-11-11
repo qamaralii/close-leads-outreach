@@ -11,6 +11,10 @@ export function validEmail(value: string | null): value is string {
 function checkText(text: string, subject: boolean) {
   if (!text.trim() || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(text) || (subject && /[\r\n\t]/.test(text))) throw Error("Invalid message text or subject line breaks.");
 }
+export function validateMessage(subject: string, body: string) {
+  checkText(subject, true); checkText(body, false);
+  if (subject.length > 998 || body.length > 100000 || /\{\{|\}\}/.test(subject + body)) throw Error("Use filled-in text for individual messages, with no template placeholders.");
+}
 export function resolvePreview(input: z.infer<typeof requestSchema>, leads: Lead[], suppressions: Set<string>) {
   checkText(input.subject, true); checkText(input.body, false);
   const pattern = /(?<!\{)\{\{\s*(first_name|company)\s*\}\}(?!\})/g;

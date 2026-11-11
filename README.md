@@ -9,10 +9,12 @@ campaign lifecycle RPCs, and a separate sequential Python worker on Railway.
 - Protected reads use the authenticated Supabase client and existing RLS. Every
   write action verifies the session with `getUser()` and checks active membership.
 - Shared contact search, pagination, and selections up to 1,000 recipients.
-- Server-side personalization, suppression checks, deduplication and immutable
-  saved previews. Exclusions are persisted alongside the app request.
-- A distinct confirmation action submits the saved campaign. No caller-controlled
-  identity, sender, rendered messages, or Langflow inputs are accepted.
+- Server-side personalization, suppression checks, deduplication and saved draft
+  previews. Exclusions are persisted alongside the app request.
+- Drafts support campaign-wide template/selection edits and individual personalized
+  message overrides, with reset-to-template and revision-aware confirmation.
+- A distinct confirmation action submits the reviewed campaign revision. No caller-controlled
+  identity, sender, or Langflow inputs are accepted. Individual message edits are validated server-side.
 - Results show recipient states and messages, refreshing every ten seconds.
 - The Python worker polls confirmed queued recipients, atomically claims and gates
   them, checks the exact Outlook account/mailbox, sends plain text via Composio
@@ -33,11 +35,35 @@ Apply migrations in order. Do not rerun migrations already applied:
 3. **New:** `supabase/migrations/202611100003_app_preview.sql`
 4. `supabase/migrations/202611100004_outlook_self_service.sql`
 5. `supabase/migrations/202611100005_contact_sorting.sql`
+6. `supabase/migrations/202611110006_draft_editing.sql`
 
 The third migration adds app request/exclusion snapshots and a service-only RPC
 that serializes duplicate preview requests. Unchanged retries return the same
 campaign even if source contacts have since changed. Edited input gets a new UUID.
 The existing lifecycle functions still perform all submit/claim/gate/finish writes.
+
+### Draft editing
+
+Apply migration **006** and deploy the matching web build together. The migration
+revokes the service role's old revision-free `submit_outreach_campaign` entry point;
+confirmation in an older web build will be unavailable until the new build is live.
+The web action now calls `confirm_outreach_revision` with the verified user, campaign,
+and reviewed version. The worker's claim/send-gate/finish contract is unchanged.
+
+On a draft preview, **Edit campaign** reopens the saved selection and templates;
+**Save changes & review** updates that same campaign, reruns personalization and
+eligibility checks, and refreshes exclusions. Customized messages are preserved
+for retained leads with the same recipient email. Removed/re-added recipients and
+changed email addresses receive the current template. **Edit message** changes one
+recipient's filled-in subject/body; **Reset to campaign template** uses the latest
+rendered template for that recipient. Legacy previews without `app_request` support
+individual edits but cannot recover a composer selection.
+
+`edit_outreach_draft` checks ownership and active membership, serializes edits and
+confirmation on the campaign lock, and increments the version transactionally.
+Unchanged retries reuse an edit ID; stale versions and conflicting edit IDs fail.
+Opening an individual editor clears and disables the review checkbox, and saved
+changes require a fresh review. Submitted campaign content stays immutable.
 
 ### Contact sorting
 
@@ -252,6 +278,9 @@ or concurrent multi-session acceptance testing.
 2. Confirm a non-member is blocked and public signup is disabled.
 3. Create one preview; verify exact personalized message, sender, and exclusions.
 4. Retry unchanged creation; confirm no duplicate campaign. Test changed input.
+   Before sending, edit the campaign selection/templates and an individual message;
+   verify override preservation/reset, cancelled edits, and unchanged save retries.
+   Open two tabs; save in one and confirm the older tab rejects stale edits/sending.
 5. Confirm the saved preview; verify worker sends once and records Graph 202.
 6. Restart the worker with a pending recording receipt; verify finish-only recovery.
 7. Repeat confirmation and test a second worker against the same queued recipient

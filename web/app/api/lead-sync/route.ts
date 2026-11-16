@@ -9,7 +9,9 @@ export async function POST(request: Request) {
   const { user } = await requireMember();
   const origin = request.headers.get("origin");
   const expectedOrigin = process.env.APP_URL ? new URL(process.env.APP_URL).origin : new URL(request.url).origin;
-  if (origin && origin !== expectedOrigin) return Response.json({ error: "Invalid request origin." }, { status: 403 });
+  const allowedOrigins = new Set([expectedOrigin]);
+  if (process.env.RAILWAY_PUBLIC_DOMAIN) allowedOrigins.add(new URL(`https://${process.env.RAILWAY_PUBLIC_DOMAIN}`).origin);
+  if (origin && !allowedOrigins.has(origin)) return Response.json({ error: "Invalid request origin." }, { status: 403 });
   if (!request.headers.get("content-type")?.startsWith("application/json")) return Response.json({ error: "JSON request required." }, { status: 400 });
   const parsed = schema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return Response.json({ error: "Invalid sync request." }, { status: 400 });

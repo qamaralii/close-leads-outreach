@@ -17,6 +17,8 @@ campaign lifecycle RPCs, and a separate sequential Python worker on Railway.
   rescheduling, and returning scheduled campaigns to draft before their send time.
 - CC and attachments have campaign defaults with independent per-recipient overrides.
   Private uploads support up to 20 files and 25 MB of combined raw bytes per email.
+- Active members can request a shared Close lead sync from the composer, with
+  progress, retries, and automatic contact-directory refresh on completion.
 - A distinct confirmation action submits the reviewed campaign revision. No caller-controlled
   identity, sender, or Langflow inputs are accepted. Individual message edits are validated server-side.
 - Results show recipient states and messages, refreshing every ten seconds.
@@ -43,6 +45,7 @@ Apply migrations in order. Do not rerun migrations already applied:
 7. `supabase/migrations/202611110007_campaign_scheduling.sql`
 8. `supabase/migrations/202611110008_email_delivery.sql`
 9. `supabase/migrations/202611110009_attachment_storage.sql`
+10. `supabase/migrations/202611160010_close_lead_sync.sql`
 
 The third migration adds app request/exclusion snapshots and a service-only RPC
 that serializes duplicate preview requests. Unchanged retries return the same
@@ -169,6 +172,65 @@ and no matching draft can be found, preparation remains pending for operator
 reconciliation; it does not blindly create and send another message. Expired upload
 sessions can be replaced after checking the draft for completed attachments.
 
+### Manual Close lead sync
+
+Apply **010 before deploying the sync controls**, then deploy a dedicated background
+service using `sync/Dockerfile`. The web app only queues a job and reads its shared
+status; exports/imports run in `sync/worker.py`, separately from email dispatch.
+The worker uses Python 3.13's standard library, with no Langflow/pandas dependency.
+
+**Sync from Close** creates or joins the workspace's active sync. All active members
+can start one and see its progress. A global partial unique index and an advisory
+lock enforce one active job. Per-user request IDs are recorded even when the user
+joins somebody else's job, so a lost response retried after completion does not
+accidentally create another export. Browser reads expose progress fields, not lease
+tokens, source manifests, API keys or download URLs.
+
+The sync worker preserves the supplied **Close Lead Dump → Supabase Lead Sync**
+behavior: request a full CSV lead export, poll its `expo_...` ID, decode gzip/UTF-8 BOM,
+and map the primary contact fields into the existing `close_leads` table. Company
+names prefer `lead_name` over `display_name`; `custom.Industry` supplies industry;
+the entire source row is retained as strings in `source_data`, including original
+`date_created`. Leads absent from an export are **retained**, not deleted. Unrelated
+lead-table columns and saved campaign/recipient snapshots are not overwritten.
+
+The entire CSV is checked for headers, nonempty IDs, duplicates and syntax before
+any imports. Raw and decoded exports are capped at 256 MiB, and individual CSV
+fields at 4 MiB. Mapped records and the CSV are privately cached on the sync worker's
+volume. A SHA-256 manifest prevents mixing a different export into a partial import.
+Every imported row uses one fixed UTC timestamp for the run. Counts mean **leads
+refreshed**, including unchanged/existing leads, rather than newly inserted leads.
+
+`import_close_lead_batch` upserts a batch and advances its progress in the **same
+transaction**. Exact batch retries do not double-count. The worker saves the export
+ID and resumes the confirmed offset after restart or a lost batch response. Leases
+last 180 seconds and are renewed between requests/chunks when 30 seconds have passed;
+every checkpoint and import checks the current token. An expired worker cannot
+write after another worker takes over.
+
+Network errors, rate limits and export wait timeouts retry with bounded backoff
+(5–300 seconds, up to five failure events per run before a terminal failure).
+**Retry failed sync** resumes the existing export and offset; **Sync from Close**
+starts a fresh export after a terminal failure. An expired/unavailable old export
+or changed manifest requires a fresh sync. The default export wait is 300 seconds;
+a timed-out poll retains its export ID instead of restarting the dump.
+
+Close credentials authenticate API requests and initial downloads on the four
+known Close hosts. They are not forwarded through redirects or attached to external
+storage URLs. The UI polls status every five seconds and refreshes contacts once
+on successful completion, preserving selection, filters, subject/body, CC and files.
+Closing the browser does not stop the job. Imports are batched: searches/previews
+made during an import can read an already-updated subset, and a failed job can leave
+confirmed batches in place. Previously reviewed campaign content stays frozen.
+
+Completed cache files are removed immediately, with hourly cleanup for leftovers
+from a lost completion response. Failed/active caches are retained for recovery;
+keep the volume private because source CSV/JSONL files contain contact data. Logs
+contain job IDs/counts rather than API keys, URLs, or lead details. The existing
+manual Langflow importer remains usable but must not run concurrently with the
+built-in sync, since its direct upserts do not participate in this worker's fencing.
+This is manual one-time sync, not a recurring ingestion schedule.
+
 ### Contact sorting
 
 Apply migration **005 before deploying the contact sorting UI**. Its read-only
@@ -184,8 +246,8 @@ missing values stay last, and lead ID breaks ties. Changing search or ordering
 resets the page, retaining selected contacts and composed messages. The displayed
 creation date is UTC and refers to the Close lead, not its individual contact.
 
-Keep the existing `close_leads` table and Flow 1 ingestion. No recurring ingestion
-or scheduled campaigns are introduced.
+The existing `close_leads` table is shared with the manual sync worker and Flow 1.
+Contact sorting itself does not introduce an ingestion schedule.
 
 ### Invite-only Auth
 
@@ -285,7 +347,8 @@ expose backend keys or any arbitrary-RPC endpoint to the browser.
 
 ## 3. Railway deployment
 
-Connect this repository to a Railway project with **two separate services**.
+Connect this repository to a Railway project with **three separate services**:
+web, email worker, and Close sync worker.
 Keep the repository root as the build context for both Dockerfiles.
 
 The current Railway API rejects the legacy `railway.toml` config-file setting.
@@ -325,7 +388,26 @@ attempts left by manual tests. Due queued recipients and pending preparations ma
 be processed immediately.
 Do not run the old manual sender for the same queued workload.
 
-### Local worker
+### Close sync service
+
+- Dockerfile: `sync/Dockerfile`; repository-root build context `/`, source `main`.
+- Run as a dedicated background service, not inside the email worker or web process.
+- Variables: all fields in `sync/.env.example`. `CLOSE_API_KEY` is a Close key with
+  lead-export access; it stays on this service and is not needed by the web app.
+- Attach its own persistent volume at `/data`; use `SYNC_CACHE_DIR=/data/close-sync`.
+- One replica, application sleeping disabled, restart on failure. No public domain
+  or HTTP health check is required. Startup logs contain `sync_worker_started`.
+- Default batch size is 200 (configurable 1–1000); export polling waits up to 300
+  seconds per attempt and retains the export ID for retries.
+- Deployment order: apply migration 010, deploy the sync worker with the Close key
+  and volume, then deploy the updated web app. The email worker does not need to
+  change for this feature. Verify the global directory uses the intended Close
+  organization before initiating a full sync.
+
+To run locally, export `sync/.env.example`'s variables, point `SYNC_CACHE_DIR` at a
+private persistent directory, and run `python -B sync/worker.py`.
+
+### Local email worker
 
 Python 3.13, standard library only; no pip dependencies. Export the fields from
 `worker/.env.example`, set `OUTCOME_DB_PATH` to an existing persistent directory,
@@ -407,6 +489,12 @@ or concurrent multi-session acceptance testing.
     In a controlled mailbox, interrupt a chunk upload, restart the worker, and verify
     one draft is resumed and sent once. Verify Mail.ReadWrite consent and Exchange
     message limits, and test cross-user download/upload denials and suppressed CC.
+13. Start Sync from Close as an active member and verify the same running job is
+    shown to a second member. Create/update a controlled Close lead and verify its
+    primary contact, company, source creation date and counts after completion.
+    Confirm repeated syncs do not duplicate IDs, and that saved campaign messages
+    are unchanged. Stop the sync worker during import, restart it, and verify
+    checkpoint recovery, a single successful completion, and composer state retention.
 
 Railway deployment, credentials, live Auth redirects, live RLS/concurrency, and
 two-user mailbox isolation must be verified in your environment. Self-service

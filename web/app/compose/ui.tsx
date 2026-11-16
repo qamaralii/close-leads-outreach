@@ -1,10 +1,11 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { prepare, editCampaign } from "../actions";
 import type { ContactSort, SortDirection } from "@/lib/contact-directory";
 import { DeliveryFields } from "../delivery-fields";
 import type { Delivery } from "@/lib/delivery";
+import { SyncControls } from "./sync-controls";
 type Contact = { close_lead_id: string; contact_name: string | null; company_name: string | null; email: string | null; close_created_at: string | null };
 type Draft = { id: string; revision: number; requestId: string; leadIds: string[]; subject: string; body: string; cc?: string[]; attachmentIds?: string[]; savedContacts?: { close_lead_id: string; recipient_name: string | null; recipient_email: string }[] };
 export function Composer({ draft }: { draft?: Draft }) {
@@ -16,6 +17,7 @@ export function Composer({ draft }: { draft?: Draft }) {
   const [loading, setLoading] = useState(true);
   const [contactError, setContactError] = useState("");
   const [retry, setRetry] = useState(0);
+  const syncCompleted = useCallback(() => setRetry(value => value + 1), []);
   const [subject, setSubject] = useState(draft?.subject ?? "Hello {{company}}"), [body, setBody] = useState(draft?.body ?? "Hi {{first_name}},\n\n");
   const [delivery, setDelivery] = useState<Delivery>({ cc: draft?.cc ?? [], attachmentIds: draft?.attachmentIds ?? [] }), [deliveryBusy, setDeliveryBusy] = useState(false);
   const [requestId, setRequestId] = useState(""), [error, setError] = useState(""), [pending, setPending] = useState(false);
@@ -29,7 +31,14 @@ export function Composer({ draft }: { draft?: Draft }) {
         const response = await fetch(`/api/contacts?${params}`, { signal: controller.signal });
         if (!response.ok || !response.headers.get("content-type")?.includes("application/json")) throw Error();
         const data = await response.json();
-        if (!controller.signal.aborted) { setContacts(data.contacts); setCount(data.count); }
+        if (!controller.signal.aborted) {
+          setContacts(data.contacts); setCount(data.count);
+          setSelectedDetails(current => {
+            const next = { ...current };
+            for (const contact of data.contacts as Contact[]) if (Object.hasOwn(next, contact.close_lead_id)) next[contact.close_lead_id] = contact.contact_name || contact.email || contact.close_lead_id;
+            return next;
+          });
+        }
       } catch { if (!controller.signal.aborted) setContactError("Could not load contacts. Try again or sign in again."); }
       finally { if (!controller.signal.aborted) setLoading(false); }
     }, 250);
@@ -48,6 +57,7 @@ export function Composer({ draft }: { draft?: Draft }) {
   return <div className="composer-grid">
     <section className="contact-panel" aria-labelledby="contacts-heading">
       <div className="panel-heading"><div><h2 id="contacts-heading"><span className="step-number">1</span>Select contacts</h2><p>Choose who you’d like to reach.</p></div><span className="badge">Close directory</span></div>
+      <SyncControls onCompleted={syncCompleted} />
       <div className="contact-tools">
         <label>Search contacts<input type="search" placeholder="Name, company, or email" value={q} onChange={e => { setQ(e.target.value); setPage(0); }} /></label>
         <label>Sort by<select value={sort} onChange={e => { const next = e.target.value as ContactSort; setSort(next); setDirection(next === "created" ? "desc" : "asc"); setPage(0); }}><option value="name">Name</option><option value="company">Company</option><option value="created">Created in Close</option></select></label>

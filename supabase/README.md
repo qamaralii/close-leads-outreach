@@ -11,6 +11,8 @@ Migration 007 adds one-time schedules and a due-time claim gate; the root README
 Migrations 008 and 009 add CC defaults/overrides, immutable attachment metadata,
 private Storage and preparation/final-dispatch RPCs. See the root README's
 **CC and attachments** section for limits, permissions and deployment order.
+Migration 010 adds shared manual Close sync jobs, private request/lease state and
+atomic batch upsert checkpoints. See **Manual Close lead sync** in the root README.
 
 `migrations/202611100001_outreach_foundation.sql` is a new, unapplied migration.
 It extends the existing `public.close_leads` table without replacing Flow 1.

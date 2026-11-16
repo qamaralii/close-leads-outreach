@@ -15,6 +15,8 @@ campaign lifecycle RPCs, and a separate sequential Python worker on Railway.
   message overrides, with reset-to-template and revision-aware confirmation.
 - One-time scheduling supports local-time defaults, selectable time zones,
   rescheduling, and returning scheduled campaigns to draft before their send time.
+- CC and attachments have campaign defaults with independent per-recipient overrides.
+  Private uploads support up to 20 files and 25 MB of combined raw bytes per email.
 - A distinct confirmation action submits the reviewed campaign revision. No caller-controlled
   identity, sender, or Langflow inputs are accepted. Individual message edits are validated server-side.
 - Results show recipient states and messages, refreshing every ten seconds.
@@ -39,6 +41,8 @@ Apply migrations in order. Do not rerun migrations already applied:
 5. `supabase/migrations/202611100005_contact_sorting.sql`
 6. `supabase/migrations/202611110006_draft_editing.sql`
 7. `supabase/migrations/202611110007_campaign_scheduling.sql`
+8. `supabase/migrations/202611110008_email_delivery.sql`
+9. `supabase/migrations/202611110009_attachment_storage.sql`
 
 The third migration adds app request/exclusion snapshots and a service-only RPC
 that serializes duplicate preview requests. Unchanged retries return the same
@@ -103,6 +107,67 @@ The scheduled time is an **earliest start**, not a guaranteed delivery time or a
 simultaneous send for all recipients. The sequential worker starts overdue campaigns
 when it resumes after downtime. Scheduling is one-time; recurring campaigns are not
 implemented.
+
+### CC and attachments
+
+Apply **008 and 009 before deploying the updated worker and web app**. Migration
+009 creates the private `outreach-attachments` Storage bucket with a 25,000,000-byte
+file limit. No extra environment variables or Python dependencies are needed.
+Deploy the worker before enabling the updated composer. Older workers/manual
+senders can still send plain messages, but their legacy send gate rejects messages
+with CC or attachments rather than silently dropping the reviewed content.
+
+The composer stores a default CC list and attachment set for the campaign. Every
+selected contact still receives a separate personalized email, so default CC
+addresses receive one copy per selected contact. The individual review editor has
+independent CC and attachment source selectors: `NULL` inherits defaults, while an
+empty customized list explicitly means none. Changing defaults affects inheriting
+recipients only. Subject/body reset does not reset delivery overrides. Overrides
+survive campaign edits for retained contacts with the same email, and survive
+schedule withdrawal. All delivery changes are revision-aware and require review.
+
+There are up to 50 unique CC addresses and 20 distinct filenames per email. Effective
+CC is case-normalized and deduplicated, with the primary To address removed.
+Suppressed CC addresses block affected delivery rather than being silently omitted.
+Combined raw attachment content is limited to **25 MB (25,000,000 bytes)** for each
+recipient's effective list. Base64/MIME increases the actual message size, so the
+connected Exchange mailbox's total message limit must allow the resulting encoded
+message. The UI limit does not override Microsoft/provider limits.
+
+Uploads go directly to a signed, unique staging object. The server moves bytes to
+an immutable final object, verifies the actual size and records SHA-256 before a
+file becomes selectable. Previously issued staging tokens cannot replace final
+objects. Browser payloads contain attachment IDs, never arbitrary source URLs or
+backend keys. Downloads require an active owner and return verified bytes as an
+attachment. Unlinked uploads older than 24 hours are collected hourly by the worker;
+files ever linked into a reviewed preview are retained for history, including after
+being removed from a later draft revision. There is no automatic historical-file
+purge. Keep Storage service keys private and do not manually overwrite final files.
+
+Emails without attachments use the existing `sendMail` flow with `ccRecipients`.
+Emails with attachments use an Outlook draft: small files (under 3 MB) are attached
+in one POST; larger files use upload sessions with bounded binary PUT chunks to
+Microsoft's pre-authenticated upload URL. The worker verifies both source checksums
+and the prepared draft's recipient lists, subject/body and attachment checksums
+before consuming the one-time dispatch gate. Normal Graph operations use Composio;
+chunk PUTs use the returned Outlook URL directly without service credentials.
+
+**Outlook permission prerequisite:** configure `Mail.ReadWrite` as well as `Mail.Send`
+on the Composio Outlook auth configuration; retain the existing profile permission.
+Reconnect accounts if their prior consent lacks the new scope. Validate draft
+creation, attachment retrieval and upload-session operations through the actual
+Composio connection before production acceptance. A configuration/API-key lookup
+alone cannot establish an individual account's granted permissions.
+
+Preparation progress (draft ID, upload URL/ranges and dispatch intent) is durable in
+the same private SQLite database as the finish-only journal on `/data`. The worker
+finds claimed but not dispatched attempts through `pending_outreach_deliveries` and
+resumes the original attempt/token. A unique Outlook extended property reconciles
+lost draft-creation responses. Lost final chunk/attachment responses are reconciled
+against the original draft before another upload. If draft creation stays uncertain
+and no matching draft can be found, preparation remains pending for operator
+reconciliation; it does not blindly create and send another message. Expired upload
+sessions can be replaced after checking the draft for completed attachments.
 
 ### Contact sorting
 
@@ -255,8 +320,9 @@ repository are legacy references; this deployment does not load them.
 - The worker polls every five seconds and sends sequentially with one second
   between candidates. It starts processing existing queued rows as soon as deployed.
 
-Before starting the worker, inspect any queued campaigns left by manual tests.
-Only submitted/queued recipients are eligible, but they may be processed immediately.
+Before starting the worker, inspect queued campaigns and undispatched claimed
+attempts left by manual tests. Due queued recipients and pending preparations may
+be processed immediately.
 Do not run the old manual sender for the same queued workload.
 
 ### Local worker
@@ -276,10 +342,11 @@ python -B worker/worker.py
 - A provider response is written to the SQLite outbox before finish is attempted.
   A failed finish remains in the outbox and is retried after restart. The existing
   finish RPC accepts identical retries.
-- A crash after claiming, after consuming the gate, or after provider execution
-  but before the local journal commit can leave `sending`. The worker never
-  reclaims that attempt. The UI shows its unresolved state; operator reconciliation
-  is required. There is no cross-system exactly-once guarantee.
+- A crash after claiming can resume the same pre-dispatch attempt; it is not
+  reclaimed with a new token. Once local dispatch intent is recorded, a crash or
+  lost gate response is recorded as `unknown` on recovery, without issuing a send.
+  If the volume is lost, unresolved gated attempts require operator reconciliation.
+  There is no cross-system exactly-once guarantee.
 - Lost/malformed/5xx send responses become `unknown`; no automatic resend.
 - A definite Graph 4xx rejection except 408 becomes `failed`.
 - Gate rejection (suppression, inactive sender/member) stops execution; inspect the
@@ -288,7 +355,7 @@ python -B worker/worker.py
   to retry a send. After a proven pre-send failure, create a new reviewed campaign.
 
 Worker logs contain recipient/attempt IDs and statuses, not secrets, claim tokens,
-or message bodies. SQLite contains sensitive claim tokens for pending finishes;
+or message bodies. SQLite contains sensitive claim tokens and upload-session URLs;
 keep the volume private. RPC authorization and RLS remain essential even though
 the frontend hides controls. Composio's deprecated account `user_id` response field
 is currently required for the tested ownership check; omission fails closed.
@@ -334,6 +401,12 @@ or concurrent multi-session acceptance testing.
     or alter the newer version. In a controlled environment, stop and resume the
     worker across the due time to verify overdue pickup and test concurrent
     schedule management versus first claim.
+12. Upload a small file and a large file close to the 25 MB combined limit. Verify
+    private downloads, exact received bytes, effective CC and attachment overrides,
+    and independent resets to defaults. Exercise scheduling and withdrawal with files.
+    In a controlled mailbox, interrupt a chunk upload, restart the worker, and verify
+    one draft is resumed and sent once. Verify Mail.ReadWrite consent and Exchange
+    message limits, and test cross-user download/upload denials and suppressed CC.
 
 Railway deployment, credentials, live Auth redirects, live RLS/concurrency, and
 two-user mailbox isolation must be verified in your environment. Self-service

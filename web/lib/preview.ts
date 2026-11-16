@@ -1,5 +1,6 @@
 import { z } from "zod";
-export const requestSchema = z.object({ requestId: z.uuid(), leadIds: z.array(z.string().regex(/^lead_[A-Za-z0-9]+$/)).min(1).max(1000), subject: z.string().min(1).max(998), body: z.string().min(1).max(100000) }).strict();
+import { ccSchema, attachmentIdsSchema } from "./delivery";
+export const requestSchema = z.object({ requestId: z.uuid(), leadIds: z.array(z.string().regex(/^lead_[A-Za-z0-9]+$/)).min(1).max(1000), subject: z.string().min(1).max(998), body: z.string().min(1).max(100000), cc: ccSchema.default([]), attachmentIds: attachmentIdsSchema.default([]) }).strict();
 export type Lead = { close_lead_id: string; company_name: string | null; contact_name: string | null; first_name: string | null; email: string | null };
 export function validEmail(value: string | null): value is string {
   if (!value) return false;
@@ -15,7 +16,7 @@ export function validateMessage(subject: string, body: string) {
   checkText(subject, true); checkText(body, false);
   if (subject.length > 998 || body.length > 100000 || /\{\{|\}\}/.test(subject + body)) throw Error("Use filled-in text for individual messages, with no template placeholders.");
 }
-export function resolvePreview(input: z.infer<typeof requestSchema>, leads: Lead[], suppressions: Set<string>) {
+export function resolvePreview(input: Pick<z.infer<typeof requestSchema>, "leadIds" | "subject" | "body" | "requestId">, leads: Lead[], suppressions: Set<string>) {
   checkText(input.subject, true); checkText(input.body, false);
   const pattern = /(?<!\{)\{\{\s*(first_name|company)\s*\}\}(?!\})/g;
   for (const text of [input.subject, input.body]) if (/\{\{|\}\}/.test(text.replace(pattern, ""))) throw Error("Supported placeholders: {{first_name}} and {{company}}.");

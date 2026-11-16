@@ -8,6 +8,9 @@ in-place draft editing and replaces revision-free confirmation with
 the current contract and deployment order. Submitted snapshots remain immutable.
 Migration 007 adds one-time schedules and a due-time claim gate; the root README's
 **Campaign scheduling** section supersedes the scheduling restrictions below.
+Migrations 008 and 009 add CC defaults/overrides, immutable attachment metadata,
+private Storage and preparation/final-dispatch RPCs. See the root README's
+**CC and attachments** section for limits, permissions and deployment order.
 
 `migrations/202611100001_outreach_foundation.sql` is a new, unapplied migration.
 It extends the existing `public.close_leads` table without replacing Flow 1.

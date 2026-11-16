@@ -6,6 +6,8 @@ import { z } from "zod";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { resolveSchedule } from "@/lib/scheduling";
+import { ccSchema, attachmentIdsSchema } from "@/lib/delivery";
+import { validateAttachments } from "@/lib/attachments";
 
 export async function prepare(input: unknown): Promise<{ error?: string; campaignId?: string }> {
   const { user, db } = await requireMember();
@@ -36,6 +38,9 @@ export async function prepare(input: unknown): Promise<{ error?: string; campaig
 
 async function resolveRequest(request: z.infer<typeof requestSchema>, db: Awaited<ReturnType<typeof requireMember>>["db"]) {
   const admin = adminClient();
+  const { user } = await requireMember();
+  try { await validateAttachments(user.id, request.attachmentIds); }
+  catch (error) { return { error: error instanceof Error ? error.message : "Attachments unavailable." }; }
   const leads: Lead[] = [];
   for (let start = 0; start < request.leadIds.length; start += 50) {
     const batch = request.leadIds.slice(start, start + 50);
@@ -46,7 +51,7 @@ async function resolveRequest(request: z.infer<typeof requestSchema>, db: Awaite
       leads.push(...data); offset += data.length;
     }
   }
-  const emails = [...new Set(leads.map(l => l.email?.trim().toLowerCase()).filter((s): s is string => !!s))];
+  const emails = [...new Set([...leads.map(l => l.email?.trim().toLowerCase()).filter((s): s is string => !!s), ...request.cc])];
   const suppressed = new Set<string>();
   for (let start = 0; start < emails.length; start += 50) {
     for (let offset = 0; ; ) {
@@ -57,6 +62,7 @@ async function resolveRequest(request: z.infer<typeof requestSchema>, db: Awaite
     }
   }
   let resolved;
+  if (request.cc.some(address => suppressed.has(address))) return { error: "A CC address is suppressed. Remove it before creating a preview." };
   try { resolved = resolvePreview(request, leads, suppressed); }
   catch (error) { return { error: error instanceof Error ? error.message : "Preview resolution failed." }; }
   return resolved;
@@ -95,9 +101,20 @@ export async function editMessage(input: unknown): Promise<{ error?: string; cam
   return saveEdit(user.id, edit, { operation: edit.reset ? "reset" : "message", editId: edit.editId, recipientId: edit.recipientId, subject: edit.subject, body: edit.body });
 }
 
+const recipientDeliverySchema = editSchema.extend({ recipientId: z.uuid(), cc: ccSchema.nullable(), attachmentIds: attachmentIdsSchema.nullable() }).strict();
+export async function editDelivery(input: unknown): Promise<{ error?: string; campaignId?: string }> {
+  const { user } = await requireMember();
+  const parsed = recipientDeliverySchema.safeParse(input);
+  if (!parsed.success) return { error: "Invalid CC or attachment settings." };
+  const edit = parsed.data;
+  try { if (edit.attachmentIds) await validateAttachments(user.id, edit.attachmentIds); }
+  catch (error) { return { error: error instanceof Error ? error.message : "Attachments unavailable." }; }
+  return saveEdit(user.id, edit, { operation: "delivery", editId: edit.editId, recipientId: edit.recipientId, cc: edit.cc, attachmentIds: edit.attachmentIds });
+}
+
 async function saveEdit(userId: string, edit: z.infer<typeof editSchema>, payload: object) {
   const { data, error } = await adminClient().rpc("edit_outreach_draft", { p_user_id: userId, p_campaign_id: edit.campaignId, p_revision: edit.revision, p_edit: payload });
-  if (error || typeof data !== "string") return { error: error?.message.includes("Draft changed") ? "This draft changed. Refresh and review the latest version before saving." : "Changes could not be confirmed. Retry unchanged input or refresh to check the draft." };
+  if (error || typeof data !== "string") return { error: error?.message.includes("Draft changed") ? "This draft changed. Refresh and review the latest version before saving." : error?.message.includes("25 MB") ? "Attachments exceed 25 MB for one or more recipients." : error?.message.includes("Attachment") ? "An attachment is unavailable, duplicated, or not owned by this account." : "Changes could not be confirmed. Retry unchanged input or refresh to check the draft." };
   revalidatePath(`/campaigns/${edit.campaignId}`); revalidatePath(`/campaigns/${edit.campaignId}/edit`); revalidatePath("/");
   return { campaignId: data };
 }

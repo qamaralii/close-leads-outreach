@@ -3,8 +3,10 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { prepare, editCampaign } from "../actions";
 import type { ContactSort, SortDirection } from "@/lib/contact-directory";
+import { DeliveryFields } from "../delivery-fields";
+import type { Delivery } from "@/lib/delivery";
 type Contact = { close_lead_id: string; contact_name: string | null; company_name: string | null; email: string | null; close_created_at: string | null };
-type Draft = { id: string; revision: number; requestId: string; leadIds: string[]; subject: string; body: string; savedContacts?: { close_lead_id: string; recipient_name: string | null; recipient_email: string }[] };
+type Draft = { id: string; revision: number; requestId: string; leadIds: string[]; subject: string; body: string; cc?: string[]; attachmentIds?: string[]; savedContacts?: { close_lead_id: string; recipient_name: string | null; recipient_email: string }[] };
 export function Composer({ draft }: { draft?: Draft }) {
   const router = useRouter();
   const [contacts, setContacts] = useState<Contact[]>([]), [selected, setSelected] = useState<string[]>(draft?.leadIds ?? []);
@@ -15,6 +17,7 @@ export function Composer({ draft }: { draft?: Draft }) {
   const [contactError, setContactError] = useState("");
   const [retry, setRetry] = useState(0);
   const [subject, setSubject] = useState(draft?.subject ?? "Hello {{company}}"), [body, setBody] = useState(draft?.body ?? "Hi {{first_name}},\n\n");
+  const [delivery, setDelivery] = useState<Delivery>({ cc: draft?.cc ?? [], attachmentIds: draft?.attachmentIds ?? [] }), [deliveryBusy, setDeliveryBusy] = useState(false);
   const [requestId, setRequestId] = useState(""), [error, setError] = useState(""), [pending, setPending] = useState(false);
   useEffect(() => { setRequestId(crypto.randomUUID()); }, []);
   useEffect(() => {
@@ -35,7 +38,7 @@ export function Composer({ draft }: { draft?: Draft }) {
   function edited() { setRequestId(crypto.randomUUID()); }
   async function save() {
     setPending(true); setError("");
-    try { const input = { requestId: draft?.requestId ?? requestId, leadIds: selected, subject, body };
+    try { const input = { requestId: draft?.requestId ?? requestId, leadIds: selected, subject, body, ...delivery };
       const result = draft ? await editCampaign({ campaignId: draft.id, revision: draft.revision, editId: requestId }, input) : await prepare(input);
       if (result.campaignId) { router.push(`/campaigns/${result.campaignId}`); router.refresh(); }
       else setError(result.error ?? "Preview failed.");
@@ -68,9 +71,10 @@ export function Composer({ draft }: { draft?: Draft }) {
        <label>Subject <span className="input-count">{subject.length}/998</span><input maxLength={998} disabled={pending} value={subject} onChange={e => { setSubject(e.target.value); edited(); }} /></label>
        <label>Message <span className="input-count">{body.length.toLocaleString()}/100,000</span><textarea aria-describedby="placeholder-help" maxLength={100000} disabled={pending} value={body} onChange={e => { setBody(e.target.value); edited(); }} /></label>
        <p className="field-help" id="placeholder-help">Personalize with <code>{"{{first_name}}"}</code> and <code>{"{{company}}"}</code>. You’ll review every filled-in message before sending.</p>
+       <div className="delivery-defaults"><h3>Campaign delivery defaults</h3><p className="field-help">Applied to every personalized email. You can override these for individual recipients on the review page.</p><DeliveryFields value={delivery} onChange={value => { setDelivery(value); edited(); }} disabled={pending} onBusy={setDeliveryBusy} />{delivery.cc.length > 0 && <p className="notice">Each CC address will receive a separate copy for every selected contact.</p>}</div>
       <div className="compose-footer"><p className="muted">{selected.length ? `${selected.length} contact${selected.length === 1 ? "" : "s"} selected for preview` : "Select contacts to create your preview."}</p>
         {draft && <p className="field-help">Customized messages are preserved for retained recipients with the same email address. Reset them on the review page to use the updated template.</p>}
-        {error && <p className="error" role="alert">{error}</p>}<button disabled={pending || !selected.length || !requestId || !subject.trim() || !body.trim()} onClick={save}>{pending ? "Saving preview…" : draft ? "Save changes & review →" : "Create saved preview →"}</button>{draft && <button className="secondary" disabled={pending} onClick={() => router.push(`/campaigns/${draft.id}`)}>Cancel</button>}<small>This saves a draft. Sending requires your confirmation.</small>
+         {error && <p className="error" role="alert">{error}</p>}<button disabled={pending || deliveryBusy || !selected.length || !requestId || !subject.trim() || !body.trim()} onClick={save}>{pending ? "Saving preview…" : draft ? "Save changes & review →" : "Create saved preview →"}</button>{draft && <button className="secondary" disabled={pending || deliveryBusy} onClick={() => router.push(`/campaigns/${draft.id}`)}>Cancel</button>}<small>This saves a draft. Sending requires your confirmation.</small>
       </div>
     </section>
   </div>;
